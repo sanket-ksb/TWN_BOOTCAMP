@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  service1:
+    image: digitalunit4ksb.azurecr.io/bootcamp-test/service1:latest
+    ports:
+      - "80:80"
+    networks:
+      - test-network

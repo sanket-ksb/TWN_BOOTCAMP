@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-test-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: my-test-app
+  template:
+    metadata:
+      labels:
+        app: my-test-app
+    spec:
+      containers:
+      - name: my-app
+        image: digitalunit4ksb.azurecr.io/bootcamp-test/myapp:latest

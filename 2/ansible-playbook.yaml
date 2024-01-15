@@ -1,0 +1,56 @@
+---
+- hosts: "{{ host }}"
+  vars:
+    kubeconfig_file: "/path/to/kubeconfig/file"
+    namespace: "test-new-namespace"
+    app_name: "my-app"
+    app_image: "digitalunit4ksb.azurecr.io/bootcamp-test/myapp:latest"
+  tasks:
+    - name: Create namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace }}"
+        state: present
+      kubeconfig: "{{ kubeconfig_file }}"
+
+    - name: Deploy application
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace }}"
+        state: present
+        definition:
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: "{{ app_name }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ app_name }}"
+              spec:
+                containers:
+                  - name: "{{ app_name }}"
+                    image: "{{ app_image }}"
+                    ports:
+                      - containerPort: 80
+
+    - name: Expose application
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Service
+        name: "{{ app_name }}"
+        namespace: "{{ namespace }}"
+        state: present
+        definition:
+          spec:
+            selector:
+              app: "{{ app_name }}"
+            ports:
+              - name: http
+                port: 80
+                targetPort: 80
+            type: LoadBalancer

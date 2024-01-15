@@ -1,0 +1,32 @@
+---
+- name: Configure EC2 Instances
+  hosts: managed-nodes
+  become: true
+  tasks:
+    - name: Update package cache and install Python
+      apt:
+        update_cache: yes
+        name: python
+
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Install Docker Compose
+      apt:
+        name: docker-compose
+        state: present
+
+    - name: Copy application files to EC2 instances
+      copy:
+        src: /app
+        dest: /opt/app
+        owner: ubuntu
+        group: docker
+        mode: "0644"
+
+    - name: Start Docker Compose
+      command: "docker-compose -f /opt/your_application_files/docker-compose.yml up -d"
+      args:
+        chdir: /opt/app

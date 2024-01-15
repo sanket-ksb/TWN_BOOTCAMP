@@ -1,0 +1,54 @@
+pipeline {
+    agent any
+
+    environment {
+        JENKINS_SSH_KEY_PATH = '/ssh/ssh_key'
+        SSH_KEY_FOR_MANAGED_NODE_1 = '/ssh/ssh_key_node1'
+        SSH_KEY_FOR_MANAGED_NODE_2 = '/ssh/ssh_key_node2'
+        ANSIBLE_DIRECTORY = 'ansible'
+        PLAYBOOK_NAME = 'playbook.yml'
+        ANSIBLE_CONTROL_USER = 'ansible-control-user'
+        ANSIBLE_CONTROL_NODE = 'ansible-control-node'
+    }
+
+    stages {
+        stage('Configure Ansible Control Node') {
+            steps {
+                script {
+                    sshagent(['jenkins-ssh-key']) {
+                        sh """
+                            scp -i ${JENKINS_SSH_KEY_PATH} -o StrictHostKeyChecking=no -r ${ANSIBLE_DIRECTORY}/ ${ANSIBLE_CONTROL_USER}@${ANSIBLE_CONTROL_NODE}:/home/${ANSIBLE_CONTROL_USER}/
+                            scp -i ${JENKINS_SSH_KEY_PATH} -o StrictHostKeyChecking=no ${SSH_KEY_FOR_MANAGED_NODE_1} ${ANSIBLE_CONTROL_USER}@${ANSIBLE_CONTROL_NODE}:/home/${ANSIBLE_CONTROL_USER}/ssh-keys/
+                            scp -i ${JENKINS_SSH_KEY_PATH} -o StrictHostKeyChecking=no ${SSH_KEY_FOR_MANAGED_NODE_2} ${ANSIBLE_CONTROL_USER}@${ANSIBLE_CONTROL_NODE}:/home/${ANSIBLE_CONTROL_USER}/ssh-keys/
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Install Ansible, Python3, and Boto3') {
+            steps {
+                script {
+                    sshagent(['jenkins-ssh-key']) {
+                        sh """
+                            ssh -i ${JENKINS_SSH_KEY_PATH} -o StrictHostKeyChecking=no ${ANSIBLE_CONTROL_USER}@${ANSIBLE_CONTROL_NODE} "sudo apt-get update && sudo apt-get install -y ansible python3 python3-pip"
+                            ssh -i ${JENKINS_SSH_KEY_PATH} -o StrictHostKeyChecking=no ${ANSIBLE_CONTROL_USER}@${ANSIBLE_CONTROL_NODE} "pip3 install boto3"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Execute Ansible Playbook') {
+            steps {
+                script {
+                    sshagent(['jenkins-ssh-key']) {
+                        sh """
+                            ssh -i ${JENKINS_SSH_KEY_PATH} -o StrictHostKeyChecking=no ${ANSIBLE_CONTROL_USER}@${ANSIBLE_CONTROL_NODE} "cd /home/${ANSIBLE_CONTROL_USER}/ && ansible-playbook ${PLAYBOOK_NAME}"
+                        """
+                    }
+                }
+            }
+        }
+    }
+}

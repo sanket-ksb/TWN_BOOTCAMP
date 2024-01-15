@@ -1,0 +1,50 @@
+trigger:
+- main
+
+jobs:
+- job: ProvisionAndDeploy
+  displayName: 'Provision EC2 and Deploy Docker Compose'
+  pool:
+    vmImage: 'ubuntu-latest'
+    
+  variables:
+    terraformWorkingDirectory: 'ec2'
+    dockerComposeDirectory: '.'
+    sshServiceConnection: 'bootcamp-test-ssh'
+
+  steps:
+
+  - checkout: self
+
+  # Install Terraform
+  - task: UseDotNet@2
+    displayName: 'Install Terraform'
+    inputs:
+      packageType: 'installer'
+      version: '1.0.x'
+      installationPath: $(Agent.ToolsDirectory)/terraform
+
+  - script: |
+      cd $(terraformWorkingDirectory)
+      terraform init
+      terraform apply -auto-approve
+    displayName: 'Provision EC2 with Terraform'
+  
+  # Copy Docker Compose file to the EC2 instance using scp
+  - task: PowerShell@2
+    displayName: 'Copy Docker Compose to EC2'
+    inputs:
+      targetType: 'inline'
+      script: |
+        scp -i $(SSHPrivateKey) -o StrictHostKeyChecking=no -r $(dockerComposeDirectory) $(SSHUsername)@$(EC2PublicIP):/app
+      failOnStderr: true
+
+  # Use SSH to connect to the EC2 instance and run commands
+  - task: SSH@0
+    displayName: 'SSH into EC2 and Deploy Docker Compose'
+    inputs:
+      sshEndpoint: '$(sshServiceConnection)'
+      runOptions: 'inline'
+      inline: |
+        docker-compose -f /app/docker-compose.yml up -d
+    

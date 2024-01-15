@@ -1,0 +1,55 @@
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - name: ACR_NAME
+    value: $(ACR_NAME)
+  - name: ACR_REGISTRY_URL
+    value: $(ACR_URL)
+
+stages:
+- stage: Build
+  displayName: 'Build and Push Docker Image'
+  jobs:
+  - job: build mvn
+    displayName: 'Buildjava'
+    steps:
+    - script: |
+        cd myapp && mvn build
+      displayName: 'Build maven artifact'
+  - job: build
+    displayName: 'Build Docker Image'
+    steps:
+    - task: Docker@2
+      displayName: 'Login to ACR'
+      inputs:
+        command: login
+        containerRegistry: $(ACR_REGISTRY_URL)
+    - script: |
+        docker build -t $(ACR_REGISTRY_URL)/myapp:latest .
+        docker build -t $(ACR_REGISTRY_URL)/myapp:$(Build.BuildId) .
+        docker push $(ACR_REGISTRY_URL)/myapp:latest
+        docker push $(ACR_REGISTRY_URL)/myapp:$(Build.BuildId)
+      displayName: 'Build and Push Docker Image'
+
+- stage: Deploy
+  displayName: 'Deploy to Kubernetes'
+  jobs:
+  - job: deploy
+    displayName: 'Deploy to Kubernetes'
+    steps:
+    - task: Kubernetes@1
+      displayName: 'Install kubectl'
+      inputs:
+        kubernetesServiceEndpoint: bootcamp-k8s
+        command: install
+        version: stable
+    - task: Kubernetes@1
+      displayName: 'Apply Kubernetes Manifests'
+      inputs:
+        kubernetesServiceEndpoint: bootcamp-k8s
+        command: apply
+        arguments: '-f k8s/deployment.yaml -f k8s/service.yaml'

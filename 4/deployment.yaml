@@ -1,0 +1,752 @@
+# deployment.yaml
+#
+# This YAML file defines a Kubernetes Deployment and Service for the demo application.
+# Currently this yaml file is configured and tested with Docker Desktop K8s and EKS
+# The Deployment creates a deployment,services,replica set of pods.
+# The Service exposes the  pods internally within the cluster, allowing other services to communicate.
+# Nginx exposes UI,UIBE,Keycloak services to external network via loadbalancer
+# To apply this configuration, follow steps mentioned in readme.md
+#
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${ZOOKEEPER_CONTAINER_NAME}
+  labels:
+    app: ${ZOOKEEPER_CONTAINER_NAME}
+spec:
+  replicas: ${ZOOKEEPER_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${ZOOKEEPER_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${ZOOKEEPER_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${ZOOKEEPER_CONTAINER_NAME}
+          image: ${ZOOKEEPER_IMAGE_NAME}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: zk-port
+              containerPort: ${ZOOKEEPER_PORT}
+          env:
+            - name: ZOOKEEPER_CLIENT_PORT
+              value: "${ZOOKEEPER_PORT}"
+            - name: ZOOKEEPER_TICK_TIME
+              value: "2000"
+          startupProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "nc -z localhost ${ZOOKEEPER_PORT} || exit 1"
+            periodSeconds: 10
+            timeoutSeconds: 5
+            initialDelaySeconds: 50
+          resources:
+            limits:
+              cpu: "${ZOOKEEPER_CPUS}"
+              memory: "${ZOOKEEPER_RAM}"
+      imagePullSecrets:
+        - name: acr
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-svc
+spec:
+  selector:
+    app: ${ZOOKEEPER_CONTAINER_NAME}
+  ports:
+    - protocol: TCP
+      name: zk-svc-port
+      port: ${ZOOKEEPER_PORT}
+      targetPort: ${ZOOKEEPER_PORT}
+---
+#Creation of configMap as file is currently tested with kubectl cmd line please refer readme.md
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: kafka-server-onpremise
+# data:
+#   server-onpremise.properties: |-
+#     {{ .Files.Get "wks_path/SystemEnvironment/kafka/server_onpremise.properties" | nindent 4 }}
+
+# ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${KAFKA_CONTAINER_NAME}
+  labels:
+    app: ${KAFKA_CONTAINER_NAME}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${KAFKA_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${KAFKA_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${KAFKA_CONTAINER_NAME}
+          image: ${KAFKA_IMAGE_NAME}
+          ports:
+            - name: kf-port
+              containerPort: ${KAFKA_PORT_DOCKER_HOST}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BROKER_ID
+              value: "0"
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "zookeeper-svc:2181"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka-svc:9092"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_CREATE_TOPICS
+              value: "rawdata:1:1,measurementdata:1:1,normaliseddata:1:1,snapshotdata:1:1"
+          resources:
+            limits:
+              cpu: "${KAFKA_CPUS}"
+              memory: "${KAFKA_RAM}"
+          volumeMounts:
+            - name: kafka-server-onpremise
+              mountPath: /etc/kafka/server.properties
+              subPath: server.properties
+
+      volumes:
+        - name: kafka-server-onpremise
+          configMap:
+            name: kafka-server-onpremise
+            items:
+              - key: server_onpremise.properties
+                path: server.properties
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-svc
+spec:
+  selector:
+    app: ${KAFKA_CONTAINER_NAME}
+  ports:
+    - name: kf-svc-port
+      port: ${KAFKA_PORT_DOCKER_HOST}
+      targetPort: ${KAFKA_PORT_DOCKER_HOST}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${POSTGRES_CONTAINER_NAME}
+  labels:
+    app: ${POSTGRES_CONTAINER_NAME}
+spec:
+  replicas: ${POSTGRES_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${POSTGRES_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${POSTGRES_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${POSTGRES_CONTAINER_NAME}
+          image: ${POSTGRES_IMAGE_NAME}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: pg-port
+              containerPort: ${POSTGRES_HOST_PORT}
+          env:
+            - name: POSTGRES_USER
+              value: "${POSTGRES_ADMIN_USER}"
+            - name: POSTGRES_PASSWORD
+              value: "${POSTGRES_ADMIN_PASS}"
+            - name: POSTGRES_DB
+              value: "${POSTGRES_DEFAULT_DB}"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          startupProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "pg_isready"
+            periodSeconds: 10
+            timeoutSeconds: 5
+            initialDelaySeconds: 10
+
+          resources:
+            limits:
+              cpu: "${POSTGRES_CPUS}"
+              memory: "${POSTGRES_RAM}"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: "/var/lib/postgresql/data"
+            - name: postgres-seed
+              mountPath: "/docker-entrypoint-initdb.d/"
+
+      volumes:
+        - name: postgres-data
+          hostPath:
+            path: "wks_path/postgres/data"
+            type: DirectoryOrCreate
+        - name: postgres-seed
+          hostPath:
+            path: "wks_path/postgres/seed"
+            type: DirectoryOrCreate
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+spec:
+  selector:
+    app: ${POSTGRES_CONTAINER_NAME}
+  ports:
+    - name: pg-svc-port
+      port: ${POSTGRES_HOST_PORT}
+      targetPort: ${POSTGRES_HOST_PORT}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${NGINX_CONTAINER_NAME}
+  labels:
+    app: ${NGINX_CONTAINER_NAME}
+spec:
+  replicas: ${NGINX_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${NGINX_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${NGINX_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${NGINX_CONTAINER_NAME}
+          image: ${NGINX_IMAGE_NAME}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: ng-port
+              containerPort: ${NGINX_HOST_PORT}
+          env:
+            - name: NGINX_HOST
+              value: "${NGINX_HOST}"
+            - name: NGINX_PORT
+              value: "${NGINX_PORT}"
+            - name: KEYCLOAK_HOST
+              value: "${KEYCLOAK_CONTAINER_NAME}-svc"
+            - name: KEYCLOAK_PORT
+              value: "${KEYCLOAK_PORT}"
+            - name: UI_HOST
+              value: "${UIFRONTEND_CONTAINER_NAME}-svc"
+            - name: UI_PORT
+              value: "${UIFRONTEND_PORT}"
+            - name: API_HOST
+              value: "${UIBACKEND_CONTAINER_NAME}"
+            - name: API_PORT
+              value: "${UIBACKEND_PORT}"
+          readinessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "curl http://ui-svc || exit 1"
+            periodSeconds: 10
+            timeoutSeconds: 5
+            initialDelaySeconds: 50
+          resources:
+            limits:
+              cpu: "${NGINX_CPUS}"
+              memory: "${NGINX_RAM}"
+          volumeMounts:
+            - name: nginx-templates
+              mountPath: "/etc/nginx/templates"
+
+      volumes:
+        - name: nginx-templates
+          hostPath:
+            path: wks_path/nginx/templates
+            type: DirectoryOrCreate
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-svc
+spec:
+  selector:
+    app: ${NGINX_CONTAINER_NAME}
+  type: LoadBalancer
+  ports:
+    - name: ng-svc-port
+      port: ${NGINX_HOST_PORT}
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${KEYCLOAK_CONTAINER_NAME}
+  labels:
+    app: ${KEYCLOAK_CONTAINER_NAME}
+spec:
+  replicas: ${KEYCLOAK_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${KEYCLOAK_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${KEYCLOAK_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${KEYCLOAK_CONTAINER_NAME}
+          image: jboss/keycloak:16.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: kc-port
+              containerPort: ${KEYCLOAK_PORT}
+          env:
+            - name: KEYCLOAK_USER
+              value: "${KEYCLOAK_USERNAME}"
+            - name: KEYCLOAK_PASSWORD
+              value: "vFC6UF`KM3Z^mSZ^s8+k"
+            - name: DB_VENDOR
+              value: "postgres"
+            - name: DB_ADDR
+              value: "postgres-svc"
+            - name: DB_USER
+              value: "${POSTGRES_ADMIN_USER}"
+            - name: DB_PASSWORD
+              value: "${POSTGRES_ADMIN_PASS}"
+            - name: DB_DATABASE
+              value: "keycloak"
+            - name: PROXY_ADDRESS_FORWARDING
+              value: "true"
+          readinessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "curl http://localhost:8080/auth/realms/default --fail"
+            periodSeconds: 30
+            timeoutSeconds: 10
+            initialDelaySeconds: 50
+          resources:
+            limits:
+              cpu: "${KEYCLOAK_CPUS}"
+              memory: "${KEYCLOAK_RAM}"
+          volumeMounts:
+            - name: keycloak-realm
+              mountPath: /_realm_import.json
+
+      volumes:
+        - name: keycloak-realm
+          hostPath:
+            path: wks_path/_realm_export.json
+            type: FileOrCreate
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-svc
+spec:
+  selector:
+    app: ${KEYCLOAK_CONTAINER_NAME}
+  ports:
+    - name: kc-svc-port
+      port: ${KEYCLOAK_PORT}
+      targetPort: ${KEYCLOAK_PORT}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${UIBACKEND_CONTAINER_NAME}
+  labels:
+    app: ${UIBACKEND_CONTAINER_NAME}
+spec:
+  replicas: ${UIBACKEND_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${UIBACKEND_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${UIBACKEND_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${UIBACKEND_CONTAINER_NAME}
+          image: ${UIBACKEND_CONTAINER_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: uibc-port
+              containerPort: ${UIBACKEND_PORT}
+          
+          startupProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "wget --no-verbose --tries=1 http://localhost:80/healthCheck || exit 1"
+            periodSeconds: 30
+            timeoutSeconds: 10
+            initialDelaySeconds: 30
+          resources:
+            limits:
+              cpu: "${UIBACKEND_CPUS}"
+              memory: "${UIBACKEND_RAM}"
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: uibackend-svc
+spec:
+  selector:
+    app: ${UIBACKEND_CONTAINER_NAME}
+  ports:
+    - name: uibc-svc-port
+      port: ${UIBACKEND_PORT}
+      targetPort: ${UIBACKEND_PORT}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${UIFRONTEND_CONTAINER_NAME}
+  labels:
+    app: ${UIFRONTEND_CONTAINER_NAME}
+spec:
+  replicas: ${UIFRONTEND_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${UIFRONTEND_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${UIFRONTEND_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${UIFRONTEND_CONTAINER_NAME}
+          image: ${UIFRONTEND_CONTAINER_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: ${UIFRONTEND_PORT}
+          env:
+            - name: APPLICATIONSETTINGS_BACKENDUI_APIURL
+              value: "http://localhost:80/api"
+            - name: APPLICATIONSETTINGS_BACKENDUI_MONITORSTATE
+              value: "true"
+            - name: APPLICATIONSETTINGS_BACKENDUI_AUTHAPIURL
+              value: "http://keycloak-svc:${KEYCLOAK_PORT}"
+          readinessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "curl --fail --silent http://localhost:80/healthCheck | grep Healthy || exit 1"
+            periodSeconds: 30
+            timeoutSeconds: 10
+            initialDelaySeconds: 10
+          resources:
+            limits:
+              cpu: "${UIFRONTEND_CPUS}"
+              memory: "${UIFRONTEND_RAM}"
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui-svc
+spec:
+  selector:
+    app: ${UIFRONTEND_CONTAINER_NAME}
+  ports:
+    - name: ui-svc-port
+      port: ${UIFRONTEND_PORT}
+      targetPort: ${UIFRONTEND_PORT}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${MESSAGEPROCESSING_CONTAINER_NAME}
+  labels:
+    app: ${MESSAGEPROCESSING_CONTAINER_NAME}
+spec:
+  replicas: ${MESSAGEPROCESSING_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${MESSAGEPROCESSING_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${MESSAGEPROCESSING_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${MESSAGEPROCESSING_CONTAINER_NAME}
+          image: ${MESSAGEPROCESSING_IMAGE}
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: "${MESSAGEPROCESSING_CPUS}"
+              memory: "${MESSAGEPROCESSING_RAM}"
+      imagePullSecrets:
+        - name: acr
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${WKSERVICE_CONTAINER_NAME}
+  labels:
+    app: ${WKSERVICE_CONTAINER_NAME}
+spec:
+  replicas: ${WKSERVICE_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${WKSERVICE_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${WKSERVICE_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${WKSERVICE_CONTAINER_NAME}
+          image: ${WKSERVICE_IMAGE}
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: "${WKSERVICE_CPUS}"
+              memory: "${WKSERVICE_RAM}"
+          volumeMounts:
+            - mountPath: "/mnt/_measurement"
+              name: WKS-measurement
+      imagePullSecrets:
+        - name: acr
+      volumes:
+        - name: WKS-measurement
+          hostPath:
+            path: wks_path/_measurements
+            type: DirectoryOrCreate
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${REPLICATIONSERVICE_CONTAINER_NAME}
+  labels:
+    app: ${REPLICATIONSERVICE_CONTAINER_NAME}
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: ${REPLICATIONSERVICE_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${REPLICATIONSERVICE_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${REPLICATIONSERVICE_CONTAINER_NAME}
+          image: ${REPLICATIONSERVICE_IMAGE}
+          imagePullPolicy: IfNotPresent
+          
+          resources:
+            limits:
+              cpu: "0.25"
+              memory: "200Mi"
+      imagePullSecrets:
+        - name: acr
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${NEWDATASERVICE_CONTAINER_NAME}
+  labels:
+    app: ${NEWDATASERVICE_CONTAINER_NAME}
+spec:
+  replicas: ${NEWDATASERVICE_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${NEWDATASERVICE_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${NEWDATASERVICE_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${NEWDATASERVICE_CONTAINER_NAME}
+          image: ${NEWDATASERVICE_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rg-port
+              containerPort: ${NEWDATASERVICE_PORT}
+          
+          startupProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "curl --fail --silent localhost:80/actuator/health | grep UP || exit 1"
+            periodSeconds: 20
+            timeoutSeconds: 5
+            initialDelaySeconds: 30
+          resources:
+            limits:
+              cpu: "${NEWDATASERVICE_CPUS}"
+              memory: "500Mi"
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: newdata-svc
+spec:
+  selector:
+    app: ${NEWDATASERVICE_CONTAINER_NAME}
+  ports:
+    - name: rg-svc-port
+      port: ${NEWDATASERVICE_PORT}
+      targetPort: ${NEWDATASERVICE_PORT}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${REPORTINGSERVICE_CONTAINER_NAME}
+  labels:
+    app: ${REPORTINGSERVICE_CONTAINER_NAME}
+spec:
+  replicas: ${REPORTINGSERVICE_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${REPORTINGSERVICE_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${REPORTINGSERVICE_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${REPORTINGSERVICE_CONTAINER_NAME}
+          image: ${REPORTINGSERVICE_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rps-port
+              containerPort: ${REPORTINGSERVICE_PORT}
+          env:
+            - name: APPLICATIONSETTINGS_KEYCLOAKCONFIGS_RSAKEY
+              value: "/run/secrets/KEYCLOAK_RSA_KEY"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: LOG_APPENDER
+              value: "stdout"
+            - name: LOG4J_FORMAT_MSG_NO_LOOKUPS
+              value: "true"
+            - name: RSA_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rsa-key-secret
+                  key: keycloak_rsa_key
+          startupProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "curl --fail --silent localhost:8083/actuator/health | grep UP || exit 1"
+            periodSeconds: 20
+            timeoutSeconds: 5
+            initialDelaySeconds: 20
+
+          resources:
+            limits:
+              cpu: "${REPORTINGSERVICE_CPUS}"
+              memory: "${REPORTINGSERVICE_RAM}"
+          volumeMounts:
+            - name: rps-templates
+              mountPath: "/usr/src/reportingService/templates/"
+            - name: rps-jasperreports
+              mountPath: "/usr/src/reportingService/rps-templates"
+
+      volumes:
+        - name: rps-templates
+          hostPath:
+            path: wks_path/reportingservice
+            type: DirectoryOrCreate
+        - name: rps-jasperreports
+          emptyDir: {}
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reporting-svc
+spec:
+  selector:
+    app: ${REPORTINGSERVICE_CONTAINER_NAME}
+  ports:
+    - name: rp-svc-port
+      port: ${REPORTINGSERVICE_PORT}
+      targetPort: ${REPORTINGSERVICE_PORT}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${METRICCONVERSIONSERVICE_CONTAINER_NAME}
+  labels:
+    app: ${METRICCONVERSIONSERVICE_CONTAINER_NAME}
+spec:
+  replicas: ${METRICCONVERSIONSERVICE_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${METRICCONVERSIONSERVICE_CONTAINER_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${METRICCONVERSIONSERVICE_CONTAINER_NAME}
+    spec:
+      containers:
+        - name: ${METRICCONVERSIONSERVICE_CONTAINER_NAME}
+          image: ${METRICCONVERSIONSERVICE_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: ucs-port
+              containerPort: ${METRICCONVERSIONSERVICE_PORT}
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev"
+            - name: LOG_LEVEL
+          resources:
+            limits:
+              cpu: "${METRICCONVERSIONSERVICE_CPUS}"
+
+      imagePullSecrets:
+        - name: acr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unit-svc
+spec:
+  selector:
+    app: ${METRICCONVERSIONSERVICE_CONTAINER_NAME}
+  ports:
+    - name: uc-svc-port
+      port: ${METRICCONVERSIONSERVICE_PORT}
+      targetPort: ${METRICCONVERSIONSERVICE_PORT}
